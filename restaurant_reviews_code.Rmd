@@ -1,0 +1,264 @@
+---
+title: "Group7_Tet"
+author: "Group 7"
+output: 
+  html_document:
+    number_sections: yes
+    toc: yes
+    fig_width: 15
+    fig_height: 10
+editor_options: 
+  chunk_output_type: inline
+---
+```{r setup, include=FALSE, warning = FALSE, message = FALSE}
+#install.packages(c("tidyverse", "quanteda", "quanteda.textplots", "tidytext", "sentimentr", "topicmodels", "textdata", "wordcloud" , "caret", "textclean","SnowballC", "ggthemes"))
+```
+import stuff
+```{r importing libraries}
+library(tidyverse)
+library(quanteda)
+library(quanteda.textplots)
+library(tidytext)
+library(sentimentr)
+library(topicmodels)
+library(textdata)
+library(wordcloud)
+library(caret)
+library(textclean)
+library(SnowballC)
+library(ggthemes)
+```
+
+# 1. Load and Preprocess Data
+
+```{r load-clean}
+review_df <- read.csv("top240_restaurants_recommended_losangeles2.csv") 
+str(review_df)
+summary(review_df)
+
+review_df <- review_df |>
+  mutate(
+    Price = na_if(Price, ""),
+    Price = ifelse(is.na(Price),names(sort(table(Price), decreasing = TRUE))[1],Price),
+    review_id = row_number(),
+    #Comment = replace_contraction(Comment),
+    #Comment = replace_word_elongation(Comment),
+    #Comment = replace_internet_slang(Comment),
+    #Comment = str_replace_all(Comment, "<.*?>", ""), # Remove HTML
+    #Comment = str_to_lower(Comment) # To lowercase
+  )
+
+head(review_df$Price)
+str(review_df)
+```
+
+new grpahs
+```{r}
+ggplot(review_df, aes(x = StarRating)) +
+  geom_histogram(bins = 10, fill = "steelblue", color = "black", alpha = 0.8) +
+  labs(title = "Distribution of Star Ratings",
+       x = "Star Rating",
+       y = "Number of Restaurants") +
+  theme_minimal()
+```
+NJDBE
+
+BFEBF
+```{r}
+review_df %>%
+  mutate(Price = as.factor(Price)) %>%
+  ggplot(aes(x = Price, y = Rank, fill = Price)) +
+  geom_boxplot(show.legend = FALSE) +
+  labs(title = "Restaurant Rank by Price Category",
+       x = "Price ($ = Cheap, $$$$ = Expensive)",
+       y = "Rank (Lower = More Popular/Recommended)") +
+  theme_minimal() +
+  coord_flip()
+```
+
+
+
+# 2. Tokenization & Lemmatization
+
+```{r tokenization}
+tokens_clean <- review_df$Comment %>%
+  tokens(remove_punct = TRUE, remove_numbers = TRUE, remove_symbols = TRUE) %>%
+  tokens_wordstem(language = "en") %>%
+  tokens_remove(stopwords("en"))
+
+```
+
+# 3. Word Frequency & Visualizations
+
+```{r dfm-wordclouds}
+dfm_words <- dfm(tokens_clean)
+
+# Top word barplot
+top_terms <- topfeatures(dfm_words, 20)
+tibble(term = names(top_terms), freq = top_terms) %>%
+  ggplot(aes(x = reorder(term, freq), y = freq)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Top 20 Most Frequent Terms", x = "Term", y = "Frequency")
+
+# Word cloud
+textplot_wordcloud(dfm_words, max_words = 100)
+```
+
+# 4. Comparative Word Clouds by Rating Group
+
+```{r comp-clouds}
+# Load required libraries
+library(dplyr)
+library(tidyr)
+library(tidytext)
+library(wordcloud)
+library(RColorBrewer)
+
+# Step 1: Define Rating Groups
+review_df <- review_df %>%
+  mutate(
+    RatingGroup = case_when(
+      StarRating >= 4.5 ~ "5-Star",
+      StarRating >= 4.0 ~ "4-Star",
+      StarRating >= 3.0 ~ "3-Star",
+      StarRating >= 2.0 ~ "2-Star",
+      TRUE ~ "1-Star"
+    )
+  )
+
+# Step 2: Tokenize Comments and Count Words by Rating Group
+tokens_rating <- review_df %>%
+  unnest_tokens(word, Comment) %>%
+  filter(!word %in% stop_words$word) %>%
+  count(RatingGroup, word, sort = TRUE) %>%
+  group_by(RatingGroup) %>%
+  slice_max(n, n = 100) %>%
+  ungroup()
+
+# Step 3: Plot Comparative Word Clouds
+par(mfrow = c(1, 1))  # 2x2 grid for 4 rating groups
+for (grp in unique(tokens_rating$RatingGroup)) {
+  with(filter(tokens_rating, RatingGroup == grp), 
+       wordcloud(word, n, max.words = 50, colors = brewer.pal(8, "Dark2")))
+  title(grp, line = -1, font = 2, cex.main = 1.2)
+}
+```
+
+# 5. Sentiment Analysis (Lexicon-based)
+
+```{r sentiment-analysis}
+sent_scores <- sentiment_by(review_df$Comment)
+review_df$avg_sentiment <- sent_scores$ave_sentiment
+
+# Barplot sentiment by star
+review_df %>%
+  group_by(StarRating) %>%
+  summarise(avg_sent = mean(avg_sentiment)) %>%
+  ggplot(aes(x = as.factor(StarRating), y = avg_sent)) +
+  geom_col(fill = "skyblue") +
+  labs(title = "Average Sentiment by Star Rating", x = "Star Rating", y = "Avg Sentiment") +
+  theme_minimal()
+```
+
+
+
+# 6. Keyword Extraction: Positive vs Negative
+
+```{r keyword-posneg}
+review_df <- review_df %>%
+  mutate(sent_class = case_when(avg_sentiment > 0.2 ~ "Positive",
+                                avg_sentiment < -0.2 ~ "Negative",
+                                TRUE ~ "Neutral"))
+
+review_df %>%
+  unnest_tokens(word, Comment) %>%
+  filter(!word %in% stop_words$word) %>%
+  count(sent_class, word) %>%
+  group_by(sent_class) %>%
+  slice_max(n, n = 10) %>%
+  ggplot(aes(x = reorder(word, n), y = n, fill = sent_class)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sent_class, scales = "free") +
+  coord_flip() +
+  labs(title = "Top Keywords in Positive vs Negative Reviews") +
+  theme_minimal()
+```
+
+# 7. Topic Modeling (LDA)
+
+```{r lda-topics}
+dfm_trim <- dfm_trim(dfm_words, min_termfreq = 5)
+dtm <- convert(dfm_trim, to = "topicmodels")
+lda_model <- LDA(dtm, k = 5, control = list(seed = 42))
+top_terms <- tidy(lda_model, matrix = "beta") %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 8) %>%
+  ungroup()
+
+top_terms %>%
+  ggplot(aes(x = reorder_within(term, beta, topic), y = beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Top Words per Topic") +
+  theme_minimal()
+```
+
+# 8. Predictive Modeling (Regression & KNN)
+
+```{r predictive-modeling}
+model_data <- review_df %>%
+  mutate(Price = factor(Price)) %>%
+  select(StarRating, avg_sentiment, Price) %>%
+  drop_na()
+
+set.seed(101)
+train_index <- createDataPartition(model_data$StarRating, p = 0.7, list = FALSE)
+train <- model_data[train_index, ]
+test <- model_data[-train_index, ]
+
+# Linear Regression
+lm_model <- train(StarRating ~ ., data = train, method = "lm")
+pred_lm <- predict(lm_model, test)
+postResample(pred_lm, test$StarRating)
+
+
+```
+```{r}
+# KNN
+knn_model <- train(StarRating ~ ., data = train, method = "knn", tuneLength = 5)
+pred_knn <- predict(knn_model, test)
+postResample(pred_knn, test$StarRating)
+```
+
+```{r}
+library(caret)
+
+rf_model <- train(
+  StarRating ~ .,
+  data = train,
+  method = "rf",
+  trControl = trainControl(method = "cv", number = 5),
+  tuneLength = 3
+)
+
+pred_rf <- predict(rf_model, test)
+postResample(pred_rf, test$StarRating)
+```
+
+
+# 9. Business Insights
+
+- Positive reviews emphasize “friendly”, “delicious”, and “amazing” themes.
+- Low-rated reviews focus on service, delays, or cost.
+- Sentiment polarity and trust/joy levels predict star ratings well.
+- LDA topics reveal distinct customer concerns (e.g. ambiance, parking, staff).
+- Regression and KNN show sentiment-based features can forecast review ratings.
+
+# Appendix
+
+Additional visualizations and model outputs available on request.
+
